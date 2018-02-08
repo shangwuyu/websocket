@@ -1,0 +1,25 @@
+默认情况下，ws://走的时候http协议，即使主页面是通过https访问，此时会出现连接时异常"[blocked] The page at 'https://localhost:8443/endpoint-wss/index.jsp' was loaded over HTTPS, but ran insecure content from 'ws://localhost:8080/endpoint-wss/websocket': this content should also be loaded over HTTPS.Uncaught SecurityError: Failed to construct 'WebSocket': An insecure WebSocket connection may not be initiated from a page loaded over HTTPS."，此时需要使用如下连接：
+
+websocket:wss://localhost:8080/endpoint-wss/websocket
+
+sockJS:https://localhost:8080/endpoint-wss/socketJS
+
+配置nginx支持websocket，默认情况下，nginx不支持自动升级至websocket协议，否则js中会出现连接时异常"Error during WebSocket handshake: Unexpected response code: 400"，需在恰当的位置加上如下设置：
+
+server {
+    listen 8020;
+    location / {
+        proxy_pass http://websocket;
+        proxy_set_header Host $host:8020; #注意, 原host必须配置, 否则传递给后台的值是websocket,端口如果没有输入的话会是80, 这会导致连接失败
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+    }
+}
+upstream websocket {
+    server 192.168.100.10:8081;
+}
+
+经上述调整后，websocket就可以同时支持通过nginx代理的https协议，结合MQ机制，可以做到B端实时推送、B端/C端实时通信。
+非常感谢原创作者的文章。以下是作者的博客：
+nginx的https（自动跳转http->https）+nginx+websocket的完整配置可参考http://www.cnblogs.com/zhjh256/p/6262620.html。
