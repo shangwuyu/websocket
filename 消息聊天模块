@@ -1,0 +1,375 @@
+spring + websocket 整合实现聊天消息系统
+由于最近公司需要在浏览器web端实现一个消息聊天模块，于是各种百度，发现html5可以通过websocket实现后台推送消息到web。
+websocket实现全双工通信的服务器向客户端推的互联网技术，与长连接和轮询技术相比，网页套接字的优越性不言自名，
+长连接的连接资源（线程资源）随着连接资源的增多，必会耗尽。
+客户端轮询会给服务器造成很大压力，而网页套接字是在物理层非网络层建立一条客户端至服务器长连接，以此来保证服务器向客户端的即时推送，既不耗费线程资源，
+又不会不断向服务器轮询请求。
+下面讲一讲SSM框架中集成websocket技术。
+1.在maven的pom.xml中加入websocket依赖jar包，spring-websocket依赖的jar 有以下几个：
+<dependency>
+			<groupId>javax.servlet</groupId>
+			<artifactId>servlet-api</artifactId>
+			<version>2.5</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+	      <groupId>org.springframework</groupId>
+	      <artifactId>spring-messaging</artifactId>
+	      <version>4.2.3.RELEASE</version>
+	    </dependency>
+	    <dependency>
+	      <groupId>org.springframework</groupId>
+	      <artifactId>spring-websocket</artifactId>
+	      <version>4.2.3.RELEASE</version>
+	    </dependency>
+      
+2.更新web.xml中namespace.xsd版本。
+<beans xmlns="http://www.springframework.org/schema/beans"  
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"  
+       xmlns:websocket="http://www.springframework.org/schema/websocket"  
+       xsi:schemaLocation="  
+        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd  
+        http://www.springframework.org/schema/websocket http://www.springframework.org/schema/websocket/spring-websocket.xsd">
+
+3.创建websocket处理类
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.WebSocketMessage;
+import org.springframework.web.socket.WebSocketSession;
+
+import com.westangel.common.util.LogUtil;
+import com.westangel.commonservice.push.service.impl.BrowserServiceImpl;
+
+/** 
+ *@className MyWebSocketHandler
+ *@Description:
+ *@author yuanwenming
+ *@date 2018年2月1日
+ */
+@Component
+public class MyWebSocketHandler implements WebSocketHandler {
+	@Autowired
+	private BrowserServiceImpl browserService;
+
+    public static final Map<String, Set<WebSocketSession>> userSocketSessionMap;
+
+    static {
+        userSocketSessionMap = new HashMap<String, Set<WebSocketSession>>();
+    }
+    
+	public void afterConnectionClosed(WebSocketSession webSocketSession, CloseStatus closeStatus)
+			throws Exception {
+		LogUtil.log.debug("websockt afterConnectionClosed");
+		if(userSocketSessionMap == null || userSocketSessionMap.size()== 0) {
+			LogUtil.log.debug("websocket userSocketSessionMap is null");
+			return;
+		}
+        Iterator<Map.Entry<String,Set<WebSocketSession>>> iterator = userSocketSessionMap.entrySet().iterator();
+        while(iterator.hasNext()){
+            Map.Entry<String,Set<WebSocketSession>> entry = iterator.next();
+            String userId = entry.getKey();
+            Set<WebSocketSession> webSocketSessionSet = entry.getValue();
+            if(webSocketSessionSet != null && webSocketSessionSet.size() > 0) {
+            	Iterator<WebSocketSession> itor = webSocketSessionSet.iterator();
+            	while(itor.hasNext()) {
+            		WebSocketSession socketSessionMap = itor.next();
+            		if(socketSessionMap.getAttributes().get(userId)==webSocketSession.getAttributes().get(userId)){
+            			itor.remove();
+                        LogUtil.log.debug("websockt userSocketSessionMap remove object:" + webSocketSession.getAttributes().get(userId) + "removed");
+                    }
+            	}
+            }
+        }
+	}
+
+	public void afterConnectionEstablished(WebSocketSession webSocketSession)
+			throws Exception {
+		Map<String, Object> map = webSocketSession.getAttributes();
+		if(map != null && map.size() > 0) {
+			Set<String> set = map.keySet();
+			for(String userId : set) {
+				if(userSocketSessionMap.containsKey(userId)) {
+					Set<WebSocketSession> webSocketSessionSet = userSocketSessionMap.get(userId);
+					webSocketSessionSet.add(webSocketSession);
+					userSocketSessionMap.put(userId, webSocketSessionSet);
+				}else {
+					Set<WebSocketSession> webSocketSessionSet = new HashSet<WebSocketSession>();
+					webSocketSessionSet.add(webSocketSession);
+					userSocketSessionMap.put(userId, webSocketSessionSet);
+				}
+			}
+		}
+		browserService.setUserSocketSessionMap(userSocketSessionMap);
+	}
+
+	public void handleMessage(WebSocketSession webSocketSession, WebSocketMessage<?> webSocketMessage)
+			throws Exception {
+        
+	}
+
+	public void handleTransportError(WebSocketSession webSocketSession, Throwable throwable)
+			throws Exception {
+
+	}
+
+	public boolean supportsPartialMessages() {
+		return false;
+	}
+
+}
+
+创建握手接口
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpRequest;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.server.HandshakeInterceptor;
+
+import com.westangel.common.util.LogUtil;
+
+/** 
+ *@className MyHandShakeInterceptor
+ *@Description:
+ *@author yuanwenming
+ *@date 2018年2月1日
+ */
+public class MyHandShakeInterceptor implements HandshakeInterceptor {
+
+	public void afterHandshake(ServerHttpRequest serverHttpRequest, ServerHttpResponse serverHttpResponse,
+			WebSocketHandler webSocketHandler, Exception e) {
+	
+	}
+
+	public boolean beforeHandshake(ServerHttpRequest serverHttpRequest,
+			ServerHttpResponse serverHttpResponse, WebSocketHandler webSocketHandler,
+			Map<String, Object> map) throws Exception {
+        if (serverHttpRequest instanceof ServletServerHttpRequest) {
+            ServletServerHttpRequest servletRequest = (ServletServerHttpRequest) serverHttpRequest;
+            HttpServletRequest request = servletRequest.getServletRequest();
+            String userId = request.getParameter("userId");
+//            HttpSession session = servletRequest.getServletRequest().getSession(false);
+            // 标记用户
+//            User user = (User) session.getAttribute("user");
+            if(userId!=null){
+            	LogUtil.log.debug("websockt beforeHandshake==>用户id："+userId+" 被加入");
+            	map.put(userId, userId);//为服务器创建WebSocketSession做准备
+            }else{
+            	LogUtil.log.debug("websockt userId 为空");
+                return false;
+            }
+        }
+        return true;
+	}
+}
+
+处理类和握手协议配置
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurerAdapter;
+import org.springframework.web.socket.config.annotation.EnableWebSocket;
+import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
+import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
+
+/** 
+ *@className MyWebSocketConfig
+ *@Description:
+ *@author yuanwenming
+ *@date 2018年2月1日
+ */
+@Component
+@EnableWebSocket
+public class MyWebSocketConfig extends WebMvcConfigurerAdapter implements
+		WebSocketConfigurer {
+	@Autowired
+    MyWebSocketHandler handler;
+	
+	public void registerWebSocketHandlers(WebSocketHandlerRegistry webSocketHandlerRegistry) {
+		//添加websocket处理器，添加握手拦截器
+        webSocketHandlerRegistry.addHandler(handler, "/ws").addInterceptors(new MyHandShakeInterceptor()).setAllowedOrigins("*");
+
+        //添加websocket处理器，添加握手拦截器
+        webSocketHandlerRegistry.addHandler(handler, "/ws/sockjs").addInterceptors(new MyHandShakeInterceptor()).withSockJS();
+	}
+}
+或者在applicationContext.xml中配置（网络摘录）
+<bean id="websocket" class="com.up.websocket.handler.WebsocketEndPoint"/>  
+<websocket:handlers>  
+    <websocket:mapping path="/websocket" handler="websocket"/>  
+    <websocket:handshake-interceptors>  
+    <bean class="com.up.websocket.HandshakeInterceptor"/>  
+    </websocket:handshake-interceptors>  
+</websocket:handlers>
+
+服务器发送消息给客户端
+import java.io.IOException;
+import java.util.Map;
+import java.util.Set;
+
+import org.springframework.stereotype.Service;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+
+import com.google.gson.GsonBuilder;
+import com.westangel.common.bean.push.PushNotifyInfo;
+import com.westangel.common.util.LogUtil;
+import com.westangel.commonservice.push.model.PushBindInfo;
+import com.westangel.commonservice.push.service.PushInvokerService;
+
+/**
+* @author 作者 :yuanwenming
+* @Description: 浏览器web实现类
+* @version 创建时间：2018年2月2日 下午4:54:00
+* 类说明
+*/
+@Service("browserService")
+public class BrowserServiceImpl implements PushInvokerService {
+	private Map<String, Set<WebSocketSession>> userSocketSessionMap;
+
+	public void setUserSocketSessionMap(
+			Map<String, Set<WebSocketSession>> userSocketSessionMap) {
+		this.userSocketSessionMap = userSocketSessionMap;
+		LogUtil.log.debug("websockt  setBrsetUserSocketSessionMap:"+userSocketSessionMap);
+	}
+
+	@Override
+	public void pushNotify(PushNotifyInfo notify, PushBindInfo bind) {
+		if(userSocketSessionMap != null && userSocketSessionMap.size() > 0) {
+			LogUtil.log.debug("websockt 进入服务器推向浏览器web,notify==>"+notify.toString());
+			TextMessage message = new TextMessage(new GsonBuilder().setDateFormat("yyyy-MM-dd HH:mm:ss").create().toJson(notify));
+			LogUtil.log.debug("websock size:"+userSocketSessionMap.size());
+			LogUtil.log.debug("websockt getUserId:"+notify.getUserId()+" keys "+userSocketSessionMap.keySet());
+			Set<WebSocketSession> webSocketSessionSet = userSocketSessionMap.get(notify.getUserId()+"");
+			if(webSocketSessionSet != null && webSocketSessionSet.size() > 0) {
+				for(WebSocketSession webSocketSession :webSocketSessionSet) {
+					LogUtil.log.debug("websockt session==>"+webSocketSession);
+					if (webSocketSession != null && webSocketSession.isOpen()) {
+					    try {
+					    	LogUtil.log.debug("websockt sendMessage==>"+message.getPayload().toString());
+					    	webSocketSession.sendMessage(message);
+						} catch (IOException e) {
+							LogUtil.logError.debug("websockt ---pushNotify", e);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+客户端页面
+<%@ page language="java" contentType="text/html; charset=utf-8"
+    pageEncoding="utf-8"%>
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>web 聊天</title>
+<script type="text/javascript" src="<%=request.getContextPath()%>/js/jquery-3.2.1.min.js"></script>
+<style type="text/css">
+	*{margin: 0 auto; padding: 0px, auto;}
+	body{ width: 100%;}
+	.body{width: 1000px;height: 500px; }
+	.aside{ width: 196px; height: 500px; float: left;border:1px #666 solid; margin-top: 30px; }
+	.contanier{width: 800px; margin: 0 auto; margin-top: 30px; height: 500px;border: 1px #666 solid;float: right;}
+	.header{ height:38px; background-color:#9fb2da; width: 100%; text-align: center; line-height: 38px;border-bottom: 1px #666 solid; }
+	.content{ width: 800px; height: 350px;background-color: #c9dade; border-bottom: 1px #666 solid; overflow: auto;}
+	.input{ width: 800px; height: 110px;}
+	.input textarea{ width: 654px; height: 104px; float: left; font-size: 16px;}
+	.input button{ width: 140px ;height:110px;float: right; font-size: 18px; }
+	ul,li{ list-style: none; margin: 0px; padding: 0px;}
+	.left_header{ width: 60px; background-color: #cab7b7; height: 60px; float: left; text-align: center;line-height: 60px;border-radius:5px; margin-top: 10px; margin-left: 10px;}
+	.right_content{ width: 500px; float: left; margin-top: 30px; margin-left: 15px;}
+	.right_header{width: 60px; background-color: #cab7b7; height: 60px; float: right; text-align: center;line-height: 60px;border-radius:5px; margin-top: 10px; margin-right: 10px; margin-left: 15px;}
+	.left_content{width: 500px; float: right; margin-top: 30px;text-align: right; }
+	.chat_left,.chat_right{ clear: both;}
+	.aside h4{ background-color: #081e61; height: 40px; line-height: 40px; text-align: center; font-size: 18px;color: #ffffff;}
+	.aside ul li{ height: 36px ; line-height:36px; padding-left: 15px; cursor: pointer;}
+	.aside ul li:hover{ background-color: #dbe1e2;}
+</style>
+</head>
+<body>
+<div class="body">
+	<div class="aside">
+		<h4>我的好友</h4>
+		<ul id="friends">
+		</ul>
+	</div>
+	<div class="contanier">
+		<div class="header">
+			<h3 id="title">和。。。聊天</h3>
+		</div>
+		<div class="content">
+			<ul  id="msg_content">
+			</ul>
+		</div>
+		<div class="input">
+			<textarea rows="1" cols="1" id="text"></textarea>
+			<button id="send">发送</button>
+		</div>
+	</div>
+</div>
+<script type="text/javascript">
+	var users=[{name:"张三",id:"zhangsan"},{name:"小王","id":'xiaowang'},{name:"小李子 ","id":'xiaolizi'},{name:"李四","id":'lisi'},{name:"哈巴狗","id":'habagou'}];
+	var self=users[Math.round(Math.random()*(users.length-1))];
+	var websocket=null;
+	var firend=null;
+	$(function(){
+		var html="";
+		for(index in users){
+			var user=users[index];
+			if(self==user){
+				continue;
+			}
+			console.log(user+" ---"+index+'---'+self);
+			html+='<li id="'+user.id+'">'+user.name+'</li>';
+		}
+		$("#friends").append(html);
+		$("#friends").find("li").each(function(index){
+			$(this).click(function(){
+				//选择好友，建立连接
+				if(websocket!=null){
+					websocket.close();
+				}
+				websocket=new WebSocket("ws://"+window.location.host+"/websocket/ws/"+$(this).attr('id'));
+				console.log("ws://"+window.location.host+"/websocket/ws/"+$(this).attr('id'));
+				$("#friends").find("li").css("background-color","#ffffff");
+				$(this).css("background-color","#967878");
+				$("#title").text("我（"+self.name+"）和 "+$(this).text()+" 聊天");
+				firend={"id":$(this).attr('id'),"name":$(this).text()};
+				websocket.onmessage=function(event){
+					console.log(event.data);
+					$("#msg_content").append('<li class="chat_right"><div class="right_header">'+firend.name+'</div><p class="left_content"> '+event.data+'</p></li>');
+				}
+			});
+		});
+		$("#send").click(function(){
+			var text=$("#text").val();
+			if(text==null||text==""||send==undefined){
+				alert("请输入需要发送的内容");
+				return false;
+			}else{
+				websocket.send("{'msg':'"+text+"','to':'"+firend.name+"','from':'"+self.id+"'}");	
+				console.log("消息发送成功！"+"self:"+self.name);
+				$("#msg_content").append('<li class="chat_left"><div class="left_header">'+self.name+'</div><p class="right_content"> '+text+'</p></li>');
+				$("#text").val('');
+			}
+		});
+	});
+</script>
+</body>
+</html>
+
+
+按照以上步骤搭建，就完成了简单的聊天消息模块，以上是项目完成后的总结。
